@@ -1,0 +1,95 @@
+pip install selenium pandas beautifulsoup4
+
+pip install webdriver-manager
+
+import time
+import json
+import pandas as pd
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+
+# Setup headless browser
+options = webdriver.ChromeOptions()
+options.add_argument("--headless=new")  # Chrome 109+ style headless
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+base_url = "https://udisc.com"
+store_locator_url = "https://udisc.com/stores?latitude=41.6583461&longitude=-92.3482781&zoom=3.6493347"
+
+# Open the store locator
+driver.get(store_locator_url)
+time.sleep(5)
+
+store_links = set()
+
+# Loop through pagination
+while True:
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    anchors = soup.select("a.hover\\:no-underline[href^='/stores/']")
+    for a in anchors:
+        href = a.get("href")
+        if href:
+            store_links.add(base_url + href)
+
+    print(f"Found {len(store_links)} stores so far...")
+
+    # Try clicking the next arrow
+    try:
+        next_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Next Page']")
+        if "disabled" in next_button.get_attribute("class"):
+            break
+        next_button.click()
+        time.sleep(3)
+    except:
+        break
+
+print(f"Total stores found: {len(store_links)}")
+
+# Now visit each store page
+data = []
+
+for link in store_links:
+    driver.get(link)
+    time.sleep(2)
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    script_tag = soup.find("script", text=lambda x: x and "window.__PRELOADED_STATE__" in x)
+    
+    if not script_tag:
+        print(f"Skipping {link} - no script tag")
+        continue
+
+    json_text = script_tag.string.split("window.__PRELOADED_STATE__ = ", 1)[-1].strip()
+    if json_text.endswith(";"):
+        json_text = json_text[:-1]
+    
+    try:
+        data_json = json.loads(json_text)
+        store = data_json["storeDirectory"]["store"]
+
+        data.append({
+            "name": store.get("name"),
+            "locationText": store.get("locationText"),
+            "city": store.get("city"),
+            "country": store.get("country"),
+            "countryCode": store.get("countryCode"),
+            "admin1Code": store.get("admin1Code"),
+            "admin1Name": store.get("admin1Name"),
+            "established": store.get("established"),
+            "shortId": store.get("shortId"),
+            "rating": store.get("rating"),
+            "ratingCount": store.get("ratingCount")
+        })
+
+    except Exception as e:
+        print(f"Error parsing {link}: {e}")
+
+# Save to CSV
+df = pd.DataFrame(data)
+df.to_csv("udisc_stores.csv", index=False)
+print("Saved udisc_stores.csv")
+
+# Cleanup
+driver.quit()
